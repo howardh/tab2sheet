@@ -1,5 +1,9 @@
 import numpy as np
+import os
+import h5py
 import pretty_midi
+import dill
+import itertools
 
 def load_file(file_name):
     """
@@ -144,16 +148,206 @@ def notes_to_midi(notes, bpm):
     midi.instruments.append(guitar)
     return midi
 
-def notes_to_lilypond(notes):
-    pass # TODO
+def compute_note_durations(notes):
+    # Compute note durations as a fraction of bar length
+    beats_per_bar = 4
+    def count(start_index):
+        c = 1
+        for i in range(start_index+1,len(notes)):
+            if notes[i] is None:
+                c += 1
+            else:
+                break
+        return c
+    if notes[0] is None:
+        notes = notes[1:]
+    durations = [0 if notes[i] is None else count(i) for i in range(len(notes))]
+    duration_frac = [d/len(notes) for d in durations]
+
+    # Find closest note duration
+    """
+        Whole 1
+        Half 1/2
+        Dotted Half 3/4
+        Quarter 1/4
+        Dotted Quarter 3/8
+        Eigth 1/8
+        Dotted Eigth 3/16
+        Triplet 1/12
+    """
+    divs = [1,1/2,3/4,1/4,3/8,1/8,3/16,1/16,1/12]
+    divs_log = np.log(divs)
+    def find_closest(dur):
+        dur = np.log(dur)
+        dist = [np.abs(d-dur) for d in divs_log]
+        return divs[np.argmin(dist)]
+
+    output = [0 if d==0 else find_closest(d) for d in duration_frac]
+    return output
+
+def compute_note_durations2(notes):
+    num_notes = 0
+    for n in notes:
+        if n is not None:
+            num_notes += 1
+    subdivisions = 2
+    while subdivisions < num_notes:
+        subdivisions *= 2
+    subdivisions *= 2
+
+    if notes[0] is None:
+        notes = notes[1:]
+
+    boxes = [None]*subdivisions
+    for i,n in enumerate(notes):
+        if n is None:
+            continue
+        closest_box = int(i/len(notes)*subdivisions)
+        # TODO: This loop could potentially go out of bounds. If that happens,
+        # we'd need to increase the number of boxes, and try again
+        while True:
+            if boxes[closest_box] is None:
+                boxes[closest_box] = n
+                break
+            else:
+                closest_box += 1
+
+    # Convert to counts
+    durations = [None]*len(boxes)
+    count = 1
+    for i in range(len(boxes)-1,-1,-1):
+        if boxes[i] is None:
+            count += 1
+        else:
+            durations[i] = count
+            count = 1
+    if boxes[0] is None:
+        durations[0] = count
+
+    return durations
+
+def check_duration_label(labels):
+    is_dotted = []
+    labels_int = []
+    for i in range(len(labels)):
+        if labels[i][-1] == '.':
+            is_dotted.append(True)
+            labels_int.append(int(labels[i][:-1]))
+        else:
+            is_dotted.append(False)
+            labels_int.append(int(labels[i]))
+    s = 0
+    for l,d in zip(labels_int,is_dotted):
+        if d:
+            dur = 3/(2*l)
+        else:
+            dur = 1/l
+        s += dur
+    print(s)
+    return s==1
+
+def create_dataset(bars, notes):
+    file_name = "/home/ml/hhuang63/tab2sheet/data.h5"
+    global h5_file
+    h5_file = h5py.File(file_name,"r+")
+    for b,n in zip(bars, notes):
+        durations = compute_note_durations(n)
+        if sum(durations) != 1:
+            if str(b) in h5_file:
+                continue
+            for x in b:
+                print(x)
+            label = input("Label?: ")
+            if check_duration_label(label.split()):
+                print("Approved")
+                h5_file.create_dataset(str(b), data=label)
+            else:
+                print("REJECTED")
+    h5_file.close()
+
+def bar_to_lilypond_duration(durations):
+    """
+    Take a list of notes durations from compute_note_durations2() from a single bar, and convert it
+    into a string representing it in Lilypond notation.
+    """
+    size = len(durations)
+    durations = [d for d in durations if d is not None]
+    # Convert to lilypond note durations
+    def is_pow2(n):
+        return ((n & (n-1)) == 0)
+    def compute_lp_duration(d,s):
+        # If it's a power of 2
+        if is_pow2(d):
+            return str(int(size/d))
+        # If it's a multiple of 3
+        if d%3 == 0:
+            if is_pow2(int(d/3)):
+                return str(int(size/(d/3*2)))+"."
+        # Otherwise, it's a tied note. Split into factors.
+        # Test all possible splittings
+        for i in range(1,int(d/2)+1):
+            d1 = compute_lp_duration(d-i,s)
+            d2 = compute_lp_duration(i,s)
+            if d1 is None or d2 is None:
+                continue
+            if type(d1) is not list:
+                d1 = [d1]
+            if type(d2) is not list:
+                d2 = [d2]
+            return d1+d2
+        return None
+    lp_durations = [compute_lp_duration(d,size) for d in durations]
+    return lp_durations
+
+notes = ["aes","a","bes","b","c","des","d","ees","e","f","ges","g"]
+octaves = [",,,",",,",",","","'","''","'''"]
+all_notes = [n+o for o,n in itertools.product(octaves,notes)]
+def midi_to_lilypond_note(note):
+    """
+    Convert an integer midi note number into a lilypond note string.
+    """
+    return all_notes[note+4]
+
+def bar_to_lilypond_notes(notes):
+    """
+    Take a list of notes from extract_notes() and convert them into a list of
+    lilypond notes.
+    """
+    lp_notes = []
+    if notes[0] is None:
+        notes = notes[1:]
+    if notes[0] is None:
+        lp_notes.append("r")
+    for n in notes:
+        if n is None:
+            continue
+        if type(n) is list:
+            lp_notes.append([midi_to_lilypond_note(x) for x in n])
+        else:
+            lp_notes.append(midi_to_lilypond_note(n))
+    return lp_notes
+
+def bar_to_lilypond(bar):
+    notes = extract_notes([bar])[0]
+    durations = compute_note_durations2(notes)
+    lpd = bar_to_lilypond_duration(durations)
+    lpn = bar_to_lilypond_notes(notes)
+    output = ""
+    for n,d in zip(lpn,lpd):
+        if type(d) is list:
+            for x in d:
+                output += "~"+n[0]+x+" "
+        else:
+            output += n[0]+d+" "
+    return output
+
+def file_to_lilypond(file_name):
+    data = load_file("data/stairway.tab")
+    tabs = extract_tabs(data)
+    bars = extract_bars(tabs)
+    for b in bars:
+        lp = bar_to_lilypond(b)
+        print(lp)
 
 if __name__=="__main__":
-    data = load_file("data/perfect.tab")
-    print(data)
-    tabs = extract_tabs(data)
-    print(tabs)
-    bars = extract_bars(tabs)
-    print(bars)
-    notes = extract_notes(bars)
-    midi = notes_to_midi(notes, 80)
-    midi.write("file.mid")
+    file_to_lilypond("data/stairway.tab")
