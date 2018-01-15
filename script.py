@@ -334,6 +334,9 @@ def bar_to_lilypond(bar):
     lpn = bar_to_lilypond_notes(notes)
     output = ""
     for n,d in zip(lpn,lpd):
+        if type(n) is list:
+            if len(set(n)) != 1:
+                n = ["<%s>"%" ".join(set(n))]
         if type(d) is list:
             for x in d:
                 output += "~"+n[0]+x+" "
@@ -345,9 +348,17 @@ def file_to_lilypond(file_name):
     data = load_file("data/stairway.tab")
     tabs = extract_tabs(data)
     bars = extract_bars(tabs)
+    score = ""
     for b in bars:
         lp = bar_to_lilypond(b)
-        print(lp)
+        score += lp + "\n"
+    output = ("\score{"
+              "{%s}"
+              "\layout{}"
+              "\midi{}"
+              "}")%score
+    return output
 
 if __name__=="__main__":
-    file_to_lilypond("data/stairway.tab")
+    lp = file_to_lilypond("data/stairway.tab")
+    print(lp)
