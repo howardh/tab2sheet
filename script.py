@@ -149,43 +149,6 @@ def notes_to_midi(notes, bpm):
     return midi
 
 def compute_note_durations(notes):
-    # Compute note durations as a fraction of bar length
-    beats_per_bar = 4
-    def count(start_index):
-        c = 1
-        for i in range(start_index+1,len(notes)):
-            if notes[i] is None:
-                c += 1
-            else:
-                break
-        return c
-    if notes[0] is None:
-        notes = notes[1:]
-    durations = [0 if notes[i] is None else count(i) for i in range(len(notes))]
-    duration_frac = [d/len(notes) for d in durations]
-
-    # Find closest note duration
-    """
-        Whole 1
-        Half 1/2
-        Dotted Half 3/4
-        Quarter 1/4
-        Dotted Quarter 3/8
-        Eigth 1/8
-        Dotted Eigth 3/16
-        Triplet 1/12
-    """
-    divs = [1,1/2,3/4,1/4,3/8,1/8,3/16,1/16,1/12]
-    divs_log = np.log(divs)
-    def find_closest(dur):
-        dur = np.log(dur)
-        dist = [np.abs(d-dur) for d in divs_log]
-        return divs[np.argmin(dist)]
-
-    output = [0 if d==0 else find_closest(d) for d in duration_frac]
-    return output
-
-def compute_note_durations2(notes):
     num_notes = 0
     for n in notes:
         if n is not None:
@@ -226,48 +189,9 @@ def compute_note_durations2(notes):
 
     return durations
 
-def check_duration_label(labels):
-    is_dotted = []
-    labels_int = []
-    for i in range(len(labels)):
-        if labels[i][-1] == '.':
-            is_dotted.append(True)
-            labels_int.append(int(labels[i][:-1]))
-        else:
-            is_dotted.append(False)
-            labels_int.append(int(labels[i]))
-    s = 0
-    for l,d in zip(labels_int,is_dotted):
-        if d:
-            dur = 3/(2*l)
-        else:
-            dur = 1/l
-        s += dur
-    print(s)
-    return s==1
-
-def create_dataset(bars, notes):
-    file_name = "/home/ml/hhuang63/tab2sheet/data.h5"
-    global h5_file
-    h5_file = h5py.File(file_name,"r+")
-    for b,n in zip(bars, notes):
-        durations = compute_note_durations(n)
-        if sum(durations) != 1:
-            if str(b) in h5_file:
-                continue
-            for x in b:
-                print(x)
-            label = input("Label?: ")
-            if check_duration_label(label.split()):
-                print("Approved")
-                h5_file.create_dataset(str(b), data=label)
-            else:
-                print("REJECTED")
-    h5_file.close()
-
 def bar_to_lilypond_duration(durations):
     """
-    Take a list of notes durations from compute_note_durations2() from a single bar, and convert it
+    Take a list of notes durations from compute_note_durations() from a single bar, and convert it
     into a string representing it in Lilypond notation.
     """
     size = len(durations)
@@ -329,7 +253,7 @@ def bar_to_lilypond_notes(notes):
 
 def bar_to_lilypond(bar):
     notes = extract_notes([bar])[0]
-    durations = compute_note_durations2(notes)
+    durations = compute_note_durations(notes)
     lpd = bar_to_lilypond_duration(durations)
     lpn = bar_to_lilypond_notes(notes)
     output = ""
